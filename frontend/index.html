@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LiveAvatar Interviewer</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #111; color: #eee;
+           display: flex; flex-direction: column; align-items: center; margin: 0; padding: 24px; }
+    #avatar { width: 100%; max-width: 720px; aspect-ratio: 16 / 9; background: #000;
+              border-radius: 12px; overflow: hidden; }
+    #avatar video { width: 100%; height: 100%; object-fit: cover; }
+    .buttons { margin-top: 16px; display: flex; gap: 12px; }
+    button { padding: 10px 20px; font-size: 16px; border: 0; border-radius: 8px; cursor: pointer; }
+    #startBtn { background: #03c3ff; color: #fff; }
+    #stopBtn { background: #444; color: #fff; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #status { margin-top: 12px; color: #aaa; }
+  </style>
+</head>
+<body>
+  <h1>LiveAvatar Interviewer</h1>
+
+  <div id="avatar"></div>
+
+  <div class="buttons">
+    <button id="startBtn">Start</button>
+    <button id="stopBtn" disabled>Stop</button>
+  </div>
+  <p id="status">Click Start and allow the microphone.</p>
+
+  <!-- LiveKit client: handles the live video/audio connection -->
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+
+  <script>
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const statusEl = document.getElementById("status");
+    const avatarEl = document.getElementById("avatar");
+
+    let room = null;
+    let sessionId = null;
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    async function start() {
+      startBtn.disabled = true;
+      setStatus("Starting session...");
+
+      try {
+        // 1. Ask YOUR backend to create + start the LiveAvatar session.
+        const res = await fetch("/api/session", { method: "POST" });
+        if (!res.ok) throw new Error("Backend error: " + res.status);
+        const data = await res.json();
+        const { livekit_url, livekit_client_token } = data;
+        sessionId = data.session_id;
+
+        // 2. Join the LiveKit room.
+        room = new LivekitClient.Room();
+
+        // 3. When the avatar's video/audio arrives, show it on the page.
+        room.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
+          const el = track.attach();
+          avatarEl.appendChild(el);
+        });
+
+        room.on(LivekitClient.RoomEvent.Disconnected, () => {
+          setStatus("Disconnected.");
+          startBtn.disabled = false;
+          stopBtn.disabled = true;
+        });
+
+        await room.connect(livekit_url, livekit_client_token);
+
+        // 4. Turn on the microphone so the user can talk.
+        await room.localParticipant.setMicrophoneEnabled(true);
+
+        setStatus("Connected. Say hello!");
+        stopBtn.disabled = false;
+      } catch (err) {
+        console.error(err);
+        setStatus("Error: " + err.message);
+        startBtn.disabled = false;
+      }
+    }
+
+    function stop() {
+      if (room) room.disconnect();
+      // Tell the backend to end the session so billing stops.
+      if (sessionId) {
+        fetch("/api/stop", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ session_id: sessionId })
+        }).catch(console.error);
+        sessionId = null;
+      }
+      avatarEl.innerHTML = "";
+      stopBtn.disabled = true;
+      startBtn.disabled = false;
+      setStatus("Stopped.");
+    }
+
+    startBtn.addEventListener("click", start);
+    stopBtn.addEventListener("click", stop);
+  </script>
+</body>
+</html>
