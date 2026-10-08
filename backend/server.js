@@ -1,9 +1,10 @@
-require("dotenv").config();
-const express = require("express");
 const path = require("path");
+// The .env lives in the project root, so load it from there regardless of cwd.
+require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
+const express = require("express");
 
 const API = "https://api.liveavatar.com/v1";
-const API_KEY = process.env.HEY_GEN_API_KEY;
+const API_KEY = process.env.APP_LIVE_API_KEY;
 
 // Sandbox = free testing (no credits). Sessions stop after ~1 minute and
 // only the "Wayne" avatar works. Set SANDBOX=false in .env to go live.
@@ -11,12 +12,19 @@ const SANDBOX = process.env.SANDBOX !== "false";
 const SANDBOX_AVATAR_ID = "dd73ea75-1218-4ef3-92ce-606d5f7fbc0a";
 
 const AVATAR_ID = SANDBOX ? SANDBOX_AVATAR_ID : process.env.AVATAR_ID;
-const VOICE_ID = process.env.VOICE_ID;     // may be required, see notes below
-const CONTEXT_ID = process.env.CONTEXT_ID; // optional in FULL mode
+const VOICE_ID = process.env.VOICE_ID;     // Thomas voice
+const CONTEXT_ID = process.env.CONTEXT_ID; // tutor prompt, created by create-context.js
 const LANGUAGE = process.env.LANGUAGE || "en";
+// Free plan: 2 min real sessions, sandbox allows at most 60 s. Sent to the frontend for its countdown.
+const MAX_SESSION_SECONDS = SANDBOX ? 60 : 120;
+
+if (!SANDBOX && !AVATAR_ID) {
+  console.error("SANDBOX=false but AVATAR_ID is missing in .env");
+  process.exit(1);
+}
 
 if (!API_KEY) {
-  console.error("Missing HEY_GEN_API_KEY in .env");
+  console.error("Missing APP_LIVE_API_KEY in .env");
   process.exit(1);
 }
 
@@ -32,11 +40,19 @@ const unwrap = (json) => (json && json.data ? json.data : json);
 app.post("/api/session", async (req, res) => {
   try {
     // Step 1: create a session token
+    // In sandbox only Wayne works, so don't send Thomas's voice/context there.
     const persona = { language: LANGUAGE };
-    if (VOICE_ID) persona.voice_id = VOICE_ID;
-    if (CONTEXT_ID) persona.context_id = CONTEXT_ID;
+    if (!SANDBOX) {
+      if (VOICE_ID) persona.voice_id = VOICE_ID;
+      if (CONTEXT_ID) persona.context_id = CONTEXT_ID;
+    }
 
-    const body = { mode: "FULL", avatar_id: AVATAR_ID, avatar_persona: persona };
+    const body = {
+      mode: "FULL",
+      avatar_id: AVATAR_ID,
+      avatar_persona: persona,
+      max_session_duration: MAX_SESSION_SECONDS, // hard cap on the server side too
+    };
     if (SANDBOX) body.is_sandbox = true;
 
     const tokenRes = await fetch(`${API}/sessions/token`, {
@@ -71,7 +87,7 @@ app.post("/api/session", async (req, res) => {
     const { livekit_url, livekit_client_token } = unwrap(startJson);
 
     // Send only what the browser needs. The API key never leaves the server.
-    res.json({ session_id, livekit_url, livekit_client_token });
+    res.json({ session_id, livekit_url, livekit_client_token, max_seconds: MAX_SESSION_SECONDS });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
